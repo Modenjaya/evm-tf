@@ -8,8 +8,8 @@ const displayHeader = require("./src/displayHeader");
 const sleep = require("./src/sleep");
 const { loadChains, selectChain, selectNetworkType } = require("./src/chainUtils");
 
-const MAX_RETRIES = 5;
-const RETRY_DELAY = 5000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 3000;
 
 async function retry(fn, maxRetries = MAX_RETRIES, delay = RETRY_DELAY) {
   for (let i = 0; i < maxRetries; i++) {
@@ -21,6 +21,12 @@ async function retry(fn, maxRetries = MAX_RETRIES, delay = RETRY_DELAY) {
       await sleep(delay);
     }
   }
+}
+
+// Helper function untuk mendapatkan gas price dengan buffer
+async function getGasPrice(provider, bufferPercent = 10) {
+    const feeData = await provider.getFeeData();
+    return feeData.gasPrice * BigInt(100 + bufferPercent) / BigInt(100);
 }
 
 const main = async () => {
@@ -86,6 +92,7 @@ const main = async () => {
       }
     };
 
+    // Start balance printing in background
     printSenderBalance();
 
     for (let i = 1; i <= transactionCount; i++) {
@@ -93,30 +100,28 @@ const main = async () => {
       const receiverAddress = receiverWallet.address;
       console.log(colors.white(`\n🆕 Generated address ${i}: ${receiverAddress}`));
 
+      // Calculate random amount between 0.00000001 and 0.0000001 ETH
       const amountToSend = ethers.parseUnits(
         (Math.random() * (0.0000001 - 0.00000001) + 0.00000001).toFixed(10).toString(),
         "ether"
       );
 
-      /* --------------------------- TEMPORARY DISABLED --------------------------- */
-      // const gasPrice = ethers.parseUnits(
-      //   (Math.random() * (0.0015 - 0.0009) + 0.0009).toFixed(9).toString(),
-      //   'gwei'
-      // );
-
+      // Get gas price with 10% buffer
       let gasPrice;
       try {
-        gasPrice = (await provider.getFeeData()).gasPrice;
+        gasPrice = await retry(() => getGasPrice(provider, 10));
       } catch (error) {
         console.log(colors.red("❌ Failed to fetch gas price from the network."));
         continue;
       }
 
+      // Prepare legacy transaction
       const transaction = {
         to: receiverAddress,
         value: amountToSend,
         gasLimit: 21000,
         gasPrice: gasPrice,
+        nonce: await wallet.getNonce(),
         chainId: parseInt(selectedChain.chainId),
       };
 
@@ -125,9 +130,22 @@ const main = async () => {
         tx = await retry(() => wallet.sendTransaction(transaction));
       } catch (error) {
         console.log(colors.red(`❌ Failed to send transaction: ${error.message}`));
-        continue;
+        // If error contains "replacement fee too low", try with higher gas price
+        if (error.message.includes("replacement fee too low")) {
+          try {
+            gasPrice = gasPrice * BigInt(120) / BigInt(100); // Increase by 20%
+            transaction.gasPrice = gasPrice;
+            tx = await wallet.sendTransaction(transaction);
+          } catch (retryError) {
+            console.log(colors.red(`❌ Failed retry with higher gas: ${retryError.message}`));
+            continue;
+          }
+        } else {
+          continue;
+        }
       }
 
+      // Log transaction details
       console.log(colors.white(`🔗 Transaction ${i}:`));
       console.log(colors.white(`  Hash: ${colors.green(tx.hash)}`));
       console.log(colors.white(`  From: ${colors.green(senderAddress)}`));
@@ -143,8 +161,10 @@ const main = async () => {
         colors.white(`  Gas Price: ${colors.green(ethers.formatUnits(gasPrice, "gwei"))} Gwei`)
       );
 
+      // Wait between transactions
       await sleep(15000);
 
+      // Check transaction receipt
       let receipt;
       try {
         receipt = await retry(() => provider.getTransactionReceipt(tx.hash));
