@@ -24,9 +24,18 @@ async function retry(fn, maxRetries = MAX_RETRIES, delay = RETRY_DELAY) {
 }
 
 // Helper function untuk mendapatkan gas price dengan buffer
-async function getGasPrice(provider, bufferPercent = 10) {
-    const feeData = await provider.getFeeData();
-    return feeData.gasPrice * BigInt(100 + bufferPercent) / BigInt(100);
+async function getGasPrice(provider, manualGwei = null, bufferPercent = 5) {
+    try {
+        if (manualGwei !== null) {
+            const baseGasPrice = ethers.parseUnits(manualGwei.toString(), "gwei");
+            return baseGasPrice * BigInt(100 + bufferPercent) / BigInt(100);
+        }
+        const feeData = await provider.getFeeData();
+        return feeData.gasPrice * BigInt(100 + bufferPercent) / BigInt(100);
+    } catch (error) {
+        console.log(colors.yellow(`⚠️ Error getting gas price: ${error.message}`));
+        return ethers.parseUnits("0.1", "gwei");
+    }
 }
 
 const main = async () => {
@@ -47,6 +56,24 @@ const main = async () => {
   const transactionCount = readlineSync.questionInt(
     "Enter the number of transactions you want to send for each address: "
   );
+
+  // Input gas price manual
+  const useManualGas = readlineSync.keyInYN("Do you want to set gas price manually?");
+  let manualGwei = null;
+    
+  if (useManualGas) {
+      manualGwei = readlineSync.questionFloat("Enter gas price in Gwei (e.g., 0.1): ");
+      console.log(colors.green(`Setting gas price to ${manualGwei} Gwei (+ 5% buffer)`));
+  }
+
+  // Input gas limit manual
+  const useManualGasLimit = readlineSync.keyInYN("Do you want to set gas limit manually?");
+  let manualGasLimit = 21000; // Default gas limit
+
+  if (useManualGasLimit) {
+      manualGasLimit = readlineSync.questionInt("Enter gas limit (default is 21000): ");
+      console.log(colors.green(`Setting gas limit to ${manualGasLimit}`));
+  }
 
   for (const privateKey of privateKeys) {
     const wallet = new ethers.Wallet(privateKey, provider);
@@ -100,26 +127,25 @@ const main = async () => {
       const receiverAddress = receiverWallet.address;
       console.log(colors.white(`\n🆕 Generated address ${i}: ${receiverAddress}`));
 
-      // Calculate random amount between 0.00000001 and 0.0000001 ETH
       const amountToSend = ethers.parseUnits(
         (Math.random() * (0.0000001 - 0.00000001) + 0.00000001).toFixed(10).toString(),
         "ether"
       );
 
-      // Get gas price with 10% buffer
+      // Get gas price with buffer
       let gasPrice;
       try {
-        gasPrice = await retry(() => getGasPrice(provider, 10));
+        gasPrice = await retry(() => getGasPrice(provider, manualGwei));
       } catch (error) {
         console.log(colors.red("❌ Failed to fetch gas price from the network."));
         continue;
       }
 
-      // Prepare legacy transaction
+      // Prepare legacy transaction with manual gas limit
       const transaction = {
         to: receiverAddress,
         value: amountToSend,
-        gasLimit: 21000,
+        gasLimit: manualGasLimit,
         gasPrice: gasPrice,
         nonce: await wallet.getNonce(),
         chainId: parseInt(selectedChain.chainId),
@@ -159,6 +185,9 @@ const main = async () => {
       );
       console.log(
         colors.white(`  Gas Price: ${colors.green(ethers.formatUnits(gasPrice, "gwei"))} Gwei`)
+      );
+      console.log(
+        colors.white(`  Gas Limit: ${colors.green(manualGasLimit)}`)
       );
 
       // Wait between transactions
