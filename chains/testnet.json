@@ -159,5 +159,12 @@
     "chainId": "9496",
     "symbol": "tWVM",
     "explorer": "https://explorer.wvm.dev"
-  }
+  },
+  {
+	"name": "Tea",
+	"rpcUrl": "https://tea-sepolia.g.alchemy.com/public",
+	"chainId": "10218",
+	"symbol": "TEA",
+	"explorer": "https://sepolia.tea.xyz"
+ }
 ]
